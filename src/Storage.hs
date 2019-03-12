@@ -45,7 +45,7 @@ instance Serializable Record where
                                       else Nothing 
 
 dbFile :: DBPath
-dbFile = "storage.db"
+dbFile = "storage.log"
 
 serializedRecords :: IO (InputStream EncodedRecord)
 serializedRecords = do
