@@ -24,3 +24,15 @@ executable simpledb
                      , base64-bytestring
                      , text
                      , io-streams
+                     , megaparsec
+                     , conduit
+                     , binary
+                     , binary-conduit
+                     , cryptonite
+                     , cryptonite-conduit
+                     , memory
+                     , vector
+                     , cereal
+                     , cereal-conduit
+                     , containers
+                     , time
