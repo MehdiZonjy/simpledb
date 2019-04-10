@@ -1,7 +1,19 @@
 module Main where
+import qualified Log as Log
+import qualified Writer as Writer
 
-import Storage
+
+
+data Config = Config {
+    keyDir :: Log.KeyDir
+  }
+
+
+
 
 main :: IO ()
 main = do
-  putStrLn "hello world"
+  Writer.start "8181"
+--  kd <- Log.loadKeyDir
+--  let env = Config kd
+--  putStrLn "Hello World"

@@ -2,7 +2,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE Strict #-}
 
-module Log(loadKeyDir, append, get, Record(..), KeyDir) where
+module Log(loadKeyDir, append, get, KeyDir) where
 
 
 import qualified Data.Text as T
@@ -23,10 +23,7 @@ import Data.Int (Int64(..))
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map as M
 
-data Record = Record {
-    key :: !T.Text
-  , value :: !T.Text
-  } deriving (Eq, Show)
+
 
 
 data LogRecord = LogRecord {
@@ -43,8 +40,8 @@ type ValueSize = Word16
 type KeySize = Word16
 type ValuePosition = Int64
 type TimeStamp = Word32
-type Key = T.Text
-type Value = T.Text
+type Key = BS.ByteString
+type Value = BS.ByteString
 
 type KeyDir = M.Map Key ValueDescriptor
 
@@ -64,15 +61,13 @@ sumRecordCheck timestamp keySize valueSize key value = (sumBS key) + (sumBS valu
 sumBS :: ByteString -> Word32
 sumBS = BS.foldl' (\a w -> a + (fromIntegral w)) (0 :: Word32)
 
-toLogRecord :: TimeStamp -> Record -> LogRecord
-toLogRecord timestamp (Record k v) = LogRecord check timestamp keySize valueSize key value
+toLogRecord :: TimeStamp -> Key -> Value -> LogRecord
+toLogRecord timestamp  key value = LogRecord check timestamp keySize valueSize key value
   where
         keySize :: KeySize
-        keySize = fromIntegral $ T.length k
+        keySize = fromIntegral $ BS.length key
         valueSize :: ValueSize
-        valueSize = fromIntegral $ T.length v
-        key = encodeUtf8 k
-        value = encodeUtf8 v
+        valueSize = fromIntegral $ BS.length value
         check :: Word32
         check = sumRecordCheck timestamp keySize valueSize key value
 
@@ -92,13 +87,11 @@ deserializeLogValueDescriptor  = do
   timestamp <- getWord32le
   keySize <-  getWord16le
   valueSize <- getWord16le
-  keyBS <- getByteString $ fromIntegral keySize
-  valueBS <- getByteString $ fromIntegral valueSize
-  let key = decodeUtf8 keyBS
-      keyCheck = sumBS keyBS
-      valuePos :: Int64
+  key <- getByteString $ fromIntegral keySize
+  value <- getByteString $ fromIntegral valueSize
+  let valuePos :: Int64
       valuePos = 4 + 4 + 2 + 2 + (fromIntegral keySize)
-  if (check == sumRecordCheck timestamp keySize valueSize keyBS valueBS)
+  if (check == sumRecordCheck timestamp keySize valueSize key value)
     then return (key, valueSize, valuePos, timestamp)
     else fail "record is corrupted"
 
@@ -148,12 +141,12 @@ loadKeyDir = do
 
 
 
-append :: Record -> IO ()
-append rec = do
+append :: Key -> Value -> IO ()
+append key value = do
   h <- openFile activeLog AppendMode
   currTime <- getCurrentTime
   let timestamp = floor $ utctDayTime currTime :: Word32
-      log = toLogRecord timestamp rec
+      log = toLogRecord timestamp key value
       bs = runPut $ serializeLogRecord log
   BL.hPut h bs
   hClose h
@@ -165,8 +158,8 @@ get map key = do
     Nothing -> return Nothing
     Just (fieName, valSize, valPos, _) -> do h <- openFile activeLog ReadMode
                                              hSeek h AbsoluteSeek (fromIntegral valPos)
-                                             valBS <- BS.hGet h (fromIntegral valSize)
+                                             val <- BS.hGet h (fromIntegral valSize)
                                              hClose h
-                                             return . Just . decodeUtf8 $ valBS
+                                             return . Just  $ val
 
 activeLog = "log.bin"
