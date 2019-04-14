@@ -1,25 +1,48 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Server where
 
 import Network.Socket
 import qualified Data.ByteString as BS
-import Data.Binary.Get (Get ,getByteString, getWord16be, runGet, Decoder(..), runGetIncremental,pushChunk, skip, bytesRead, isEmpty )
+import Data.Binary.Get (Get ,getByteString, getWord8, getWord16be, runGet, Decoder(..), runGetIncremental,pushChunk, skip, bytesRead, isEmpty )
 import qualified Network.Socket.ByteString as SBS
 import Control.Monad.Trans.Maybe
+import Data.Text.Encoding (encodeUtf8)
 import Control.Monad.Trans.Class(lift)
-import Writer (WriterChannel, Cmd(..))
+import qualified Writer as W
+import qualified Reader as R
 import Control.Concurrent (forkIO)
-import Control.Concurrent.Chan (writeChan)
+import Debug.Trace (trace)
+
+import Control.Concurrent.Chan (writeChan, newChan, readChan)
 
 type Port = String
+data Cmd = Read BS.ByteString | Write BS.ByteString BS.ByteString
 
+
+getReadCmd :: Get Cmd
+getReadCmd = do
+  keyLength <-fmap fromIntegral getWord16be
+  key <- getByteString keyLength
+  return $ Read key
 
 getWriteCmd :: Get Cmd
 getWriteCmd  = do
-  keyLength <-fmap fromIntegral getWord16be
-  valueLength <- fmap fromIntegral getWord16be
-  key <- getByteString keyLength
-  value <-  getByteString valueLength
+  keyLength <- trace "keyLength" $ fmap fromIntegral getWord16be
+  valueLength <- trace ("valLength" <> show keyLength) fmap fromIntegral getWord16be
+  key <- trace "key" $ getByteString keyLength
+  value <- trace "val" $  getByteString valueLength
   return $ Write key value
+
+
+getCmd :: Get Cmd
+getCmd = do
+  cmd <- getWord8
+  case cmd of
+    1 -> trace "read" getReadCmd
+    2 -> trace "write" getWriteCmd
+    x -> fail $ "Unknown Command" <> show x
+
 
 
 readByteString :: Socket -> MaybeT IO  BS.ByteString
@@ -29,10 +52,10 @@ readByteString socket = do
     then MaybeT (return Nothing)
     else return bytes
 
-readWriteCmd :: Socket -> MaybeT IO  Cmd
-readWriteCmd socket = (readByteString socket) >>= start
+readCmd :: Socket -> MaybeT IO  Cmd
+readCmd socket = (readByteString socket) >>= start
   where start :: BS.ByteString -> MaybeT IO Cmd
-        start bs = parse (runGetIncremental getWriteCmd `pushChunk` bs)
+        start bs = parse (runGetIncremental getCmd `pushChunk` bs)
         parse :: Decoder Cmd -> MaybeT IO Cmd
         parse (Done _ _ cmd) = return cmd
         parse (Fail _ _ _) = MaybeT (return Nothing)
@@ -41,29 +64,44 @@ readWriteCmd socket = (readByteString socket) >>= start
 
 
 
-serverLoop :: WriterChannel -> Socket -> IO ()
-serverLoop writerChan sock = do
+serverLoop :: W.WriterChannel -> R.ReaderChannel -> Socket -> IO ()
+serverLoop writerChan readerChannel sock = do
   (clientSock, _) <- accept sock
   putStrLn "Incoming connection"
-  forkIO $ handleConn writerChan clientSock
-  serverLoop writerChan sock
+  forkIO $ handleConn writerChan readerChannel clientSock
+  serverLoop writerChan readerChannel sock
+
+executeCmd :: Socket -> W.WriterChannel -> R.ReaderChannel -> Cmd -> IO ()
+executeCmd socket writerChan _ (Write key val)= do putStrLn "Execute Write"
+                                                   writeChan writerChan (W.Write key val)
+                                                   SBS.send socket $ encodeUtf8 "done"
+                                                   return ()
+
+executeCmd socket _ readerChan (Read key) = do putStrLn "Execute Read"
+                                               resChan <- newChan
+                                               writeChan readerChan (R.Read key , resChan)
+                                               res <- readChan resChan
+                                               case res of
+                                                 (R.ReadResult Nothing) -> SBS.send socket (encodeUtf8 "Value not found")
+                                                 (R.ReadResult (Just val)) -> SBS.send socket val
+                                               return ()
 
 
-handleConn :: WriterChannel -> Socket -> IO ()
-handleConn writerChan socket = do
-  maybeCmd  <- runMaybeT (readWriteCmd socket)
+handleConn :: W.WriterChannel -> R.ReaderChannel -> Socket -> IO ()
+handleConn writerChan readerChan socket = do
+  maybeCmd  <- runMaybeT (readCmd socket)
   case maybeCmd of
-    Nothing -> (send socket "Invalid or missing Cmd") >> (putStrLn "error")
-    Just cmd ->  writeChan writerChan cmd -- (Log.append key value) >> (putStrLn "key value added") >> (send socket "ok" ) >> (return ())
+    Nothing -> (send socket "Invalid or missing Cmd") >> (putStrLn "Invalid Cmd")
+    Just cmd -> executeCmd socket writerChan readerChan cmd
   sClose socket
 
-start :: WriterChannel -> Port -> IO ()
-start writerChan port = do
+start :: R.ReaderChannel -> W.WriterChannel -> Port -> IO ()
+start readerChan writerChan port = do
   addrinfos <- getAddrInfo (Just defaultHints {addrFlags = [AI_PASSIVE]}) Nothing (Just port)
   let serverAddr = head addrinfos
   sock <- socket (addrFamily serverAddr) Stream defaultProtocol
   bind sock (addrAddress serverAddr)
   listen sock 2
   putStrLn $ "Server is Listening on port:" <> port
-  serverLoop writerChan sock
+  serverLoop writerChan readerChan sock
   sClose sock

@@ -2,7 +2,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE Strict #-}
 
-module Log(loadKeyDir, append, get, KeyDir) where
+module Log(loadKeyDir, append, get, KeyDir, Key, Value, ValueDescriptor) where
 
 
 import qualified Data.Text as T
@@ -90,10 +90,13 @@ deserializeLogValueDescriptor  = do
   key <- getByteString $ fromIntegral keySize
   value <- getByteString $ fromIntegral valueSize
   let valuePos :: Int64
-      valuePos = 4 + 4 + 2 + 2 + (fromIntegral keySize)
+      valuePos = logRecordPosition keySize 0
   if (check == sumRecordCheck timestamp keySize valueSize key value)
     then return (key, valueSize, valuePos, timestamp)
     else fail "record is corrupted"
+
+logRecordPosition :: (Integral a, Integral b) => a  -> b -> Int64
+logRecordPosition keySize logFileSize = 4+ 4 + 2 + 2 + (fromIntegral keySize) + (fromIntegral logFileSize)
 
 
 shiftValuePos :: ValuePosition -> LogValueDescriptor -> LogValueDescriptor
@@ -141,15 +144,17 @@ loadKeyDir = do
 
 
 
-append :: Key -> Value -> IO ()
+append :: Key -> Value -> IO (Key, ValueDescriptor)
 append key value = do
   h <- openFile activeLog AppendMode
+  fileSize <- hFileSize h
   currTime <- getCurrentTime
   let timestamp = floor $ utctDayTime currTime :: Word32
       log = toLogRecord timestamp key value
       bs = runPut $ serializeLogRecord log
   BL.hPut h bs
   hClose h
+  return (key, (T.pack activeLog, lrValueSize log , logRecordPosition (lrKeySize log) fileSize  , timestamp))
 
 get :: KeyDir -> Key -> IO (Maybe Value)
 get map key = do
