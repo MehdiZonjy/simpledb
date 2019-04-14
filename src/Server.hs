@@ -12,7 +12,6 @@ import Control.Monad.Trans.Class(lift)
 import qualified Writer as W
 import qualified Reader as R
 import Control.Concurrent (forkIO)
-import Debug.Trace (trace)
 
 import Control.Concurrent.Chan (writeChan, newChan, readChan)
 
@@ -28,10 +27,10 @@ getReadCmd = do
 
 getWriteCmd :: Get Cmd
 getWriteCmd  = do
-  keyLength <- trace "keyLength" $ fmap fromIntegral getWord16be
-  valueLength <- trace ("valLength" <> show keyLength) fmap fromIntegral getWord16be
-  key <- trace "key" $ getByteString keyLength
-  value <- trace "val" $  getByteString valueLength
+  keyLength <-  fmap fromIntegral getWord16be
+  valueLength <- fmap fromIntegral getWord16be
+  key <- getByteString keyLength
+  value <- getByteString valueLength
   return $ Write key value
 
 
@@ -39,8 +38,8 @@ getCmd :: Get Cmd
 getCmd = do
   cmd <- getWord8
   case cmd of
-    1 -> trace "read" getReadCmd
-    2 -> trace "write" getWriteCmd
+    1 -> getReadCmd
+    2 -> getWriteCmd
     x -> fail $ "Unknown Command" <> show x
 
 
